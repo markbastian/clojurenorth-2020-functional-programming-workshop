@@ -2,20 +2,26 @@
   (:require
     [clojure.data.csv :as csv]
     [clojure.java.io :as io]
-    [postal.core :as postal]
+    [clojure.string :as cs]
     [cuerdas.core :as cuerdas]
-    [clojure.string :as cs])
-  (:import (java.time MonthDay Year LocalDate)
-           (java.time.temporal ChronoUnit)
+    [katas.birthday.util :as util]
+    [postal.core :as postal])
+  (:import (java.time LocalDate MonthDay Year)
            (java.time.format DateTimeFormatter)
+           (java.time.temporal ChronoUnit)
            (javax.swing JOptionPane JPasswordField)))
 
+;;CSV Parsing functions
 (defn csv->maps [[headers & rows]]
   (let [headers (map cuerdas/keyword headers)]
     (->> rows
          (map (fn [row] (map cs/trim row)))
          (map (partial zipmap headers)))))
 
+(defn read-csv-file [readable]
+  (->> readable slurp csv/read-csv csv->maps))
+
+;;Date/Birthday functions
 (defn observed-birthday [year date-of-birth]
   (let [year (cond-> year (not (int? year)) (-> Year/from .getValue))]
     (.atYear ^MonthDay (MonthDay/from date-of-birth) year)))
@@ -34,9 +40,7 @@
 (defn parse-date [date-str]
   (LocalDate/parse date-str (DateTimeFormatter/ofPattern "yyyy/MM/dd")))
 
-(defn read-csv-file [readable]
-  (->> readable slurp csv/read-csv csv->maps))
-
+;;Getting into the DSL
 (defn employees-with-birthday [today employee-info]
   (->> employee-info
        (map (fn [m] (-> m
@@ -45,54 +49,30 @@
        (filter birthday?)))
 
 (defn prepare-message [from {:keys [name email] :as m}]
-  {:from    "markbastian@gmail.com"                         ;from
-   :to      "markbastian@gmail.com"                         ;email
+  {:from    from
+   :to      email
    :subject "Happy Birthday"
    :body    (format "Happy Birthday %s!\nWow, you're %s already!" name (age m))})
 
-(defn password []
-  (let [pwd (JPasswordField.)]
-    (when
-      (= JOptionPane/OK_OPTION
-         (JOptionPane/showConfirmDialog
-           nil
-           pwd
-           "Enter password:"
-           JOptionPane/OK_CANCEL_OPTION
-           JOptionPane/PLAIN_MESSAGE))
-      (.getText pwd))))
-
-(defn send-greetings [server-config {:keys [from today resource]}]
-  (->> resource
-       read-csv-file
+(defn prepare-greetings [{:keys [from today employee-data]}]
+  (->> employee-data
        (employees-with-birthday today)
-       (map (partial prepare-message from))
+       (map (partial prepare-message from))))
+
+(defn send-greetings [server-config m]
+  (->> m
+       prepare-greetings
        (map (partial postal/send-message server-config))))
 
 (comment
   (send-greetings
     {:host "smtp.gmail.com"
      :user "markbastian@gmail.com"
-     :pass (password)
+     :pass (util/password)
      :port 587
      :tls  true}
-    {:from "markbastian@gmail.com"
-     :today (LocalDate/of 2020 11 28)
-     :resource (io/resource "birthday/employees.csv")})
-
-  (def fake-send-message (constantly {:code 0, :error :SUCCESS, :message "messages sent"}))
-  (def fake-password (constantly "password"))
-
-  (with-redefs [password fake-password
-                postal/send-message fake-send-message]
-    (send-greetings
-      {:host "smtp.gmail.com"
-       :user "markbastian@gmail.com"
-       :pass (password)
-       :port 587
-       :tls  true}
-      {:from     "markbastian@gmail.com"
-       :today    (LocalDate/of 2020 11 28)
-       :resource (io/resource "birthday/employees.csv")})))
+    {:from          "markbastian@gmail.com"
+     :today         (LocalDate/of 2020 11 28)
+     :employee-data (read-csv-file (io/resource "birthday/employees.csv"))}))
 
 

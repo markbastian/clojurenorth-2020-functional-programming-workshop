@@ -1,8 +1,12 @@
 (ns katas.test.birthday
   (:require
+    [clojure.java.io :as io]
     [clojure.test :refer :all]
-    [katas.birthday.core :as birthday])
+    [katas.birthday.core :as birthday]
+    [katas.birthday.util :as util]
+    [postal.core :as postal])
   (:import (java.time LocalDate)))
+
 (deftest birthday-test
   (testing "A variety of test cases for birthday logic"
     ;Born on leap day, today is leap day.
@@ -85,7 +89,33 @@
                   :date-of-birth (LocalDate/of 2000 2 29)})))
     ))
 
-(deftest greet!
-  (testing "sends email to everyone with birthday today"
-    ;; How do we test???
-    #_(greet!)))
+(def fake-send-message (constantly {:code 0, :error :SUCCESS, :message "messages sent"}))
+(def fake-password (constantly "password"))
+
+(deftest test-prepare-greetings
+  (testing "Ability to prepare all the greetings"
+    (= [{:from "markbastian@gmail.com",
+         :to "builder.bob@example.com",
+         :subject "Happy Birthday",
+         :body "Happy Birthday Bob!\nWow, you're 22 already!"}]
+       (birthday/prepare-greetings
+         {:from          "markbastian@gmail.com"
+          :today         (LocalDate/of 2020 11 28)
+          :employee-data (birthday/read-csv-file
+                           (io/resource "birthday/employees.csv"))}))))
+
+(deftest test-send-greetings
+  (testing "Ability to send all emails"
+    (= [{:code 0, :error :SUCCESS, :message "messages sent"}]
+       (with-redefs [util/password fake-password
+                     postal/send-message fake-send-message]
+         (birthday/send-greetings
+           {:host "smtp.gmail.com"
+            :user "markbastian@gmail.com"
+            :pass (util/password)
+            :port 587
+            :tls  true}
+           {:from          "markbastian@gmail.com"
+            :today         (LocalDate/of 2020 11 28)
+            :employee-data (birthday/read-csv-file
+                             (io/resource "birthday/employees.csv"))})))))
