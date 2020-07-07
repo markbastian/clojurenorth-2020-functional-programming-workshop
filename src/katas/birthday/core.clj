@@ -2,11 +2,13 @@
   (:require
     [clojure.data.csv :as csv]
     [clojure.java.io :as io]
-    [clojure.string :as string]
     [postal.core :as postal]
     [cuerdas.core :as cuerdas]
-    [clojure.string :as cs]
-    [java-time :as jt]))
+    [clojure.string :as cs])
+  (:import (java.time MonthDay Year LocalDate)
+           (java.time.temporal ChronoUnit)
+           (java.time.format DateTimeFormatter)
+           (javax.swing JOptionPane JPasswordField)))
 
 (defn csv->maps [[headers & rows]]
   (let [headers (map cuerdas/keyword headers)]
@@ -14,45 +16,83 @@
          (map (fn [row] (map cs/trim row)))
          (map (partial zipmap headers)))))
 
-(def leap-day (jt/month-day 2 29))
+(defn observed-birthday [year date-of-birth]
+  (let [year (cond-> year (not (int? year)) (-> Year/from .getValue))]
+    (.atYear ^MonthDay (MonthDay/from date-of-birth) year)))
 
-(defn observed-birthday [year birthday]
-  (cond-> birthday
-          (and (= (jt/month-day birthday) leap-day)
-               (not (jt/leap? year)))
-          (jt/minus (jt/days 1))))
+(defn birthday? [{:keys [today date-of-birth] :or {today (LocalDate/now)}}]
+  (= today (observed-birthday today date-of-birth)))
 
-(defn birthday?
-  ([today birthday]
-   (= today (observed-birthday today birthday)))
-  ([birthday] (birthday? (jt/local-date) birthday)))
+(defn age [{:keys [today date-of-birth] :or {today (LocalDate/now)} :as m}]
+  (let [period (.until date-of-birth today)
+        years (.get period ChronoUnit/YEARS)
+        a (cond-> years
+                  (and (birthday? m) (pos? (.get period ChronoUnit/DAYS)))
+                  inc)]
+    (max 0 a)))
 
-(defn prepare-message
-  ([today {:keys [name date-of-birth] :as m}]
-   (let [age (jt/time-between :years (observed-birthday today date-of-birth) today)]
-     (assoc m
-       :subject "Happy Birthday"
-       :body (format "Happy Birthday %s!\nWow, you're %s already!" name age))))
-  ([m] (prepare-message (jt/local-date) m)))
+(defn parse-date [date-str]
+  (LocalDate/parse date-str (DateTimeFormatter/ofPattern "yyyy/MM/dd")))
 
-;(defn send-message [server message]
-;  (postal/send-message
-;    server
-;    {:from    "me@example.com"
-;     :to      (row 1)}))
+(defn read-csv-file [readable]
+  (->> readable slurp csv/read-csv csv->maps))
 
-(defn greet! []
-  (let [today (jt/local-date 1998 11 28)
-        server-config {:host "localhost"
-                       :user "azurediamond"
-                       :pass "hunter2"
-                       :port 2525}]
-    (->> (io/resource "birthday/employees.csv")
-         (io/reader)
-         (csv/read-csv)
-         csv->maps
-         (map #(update % :date-of-birth (partial jt/local-date "yyyy/MM/dd")))
-         (filter (comp #(birthday? today %) :date-of-birth))
-         (map prepare-message)
-         ;(map (partial postal/send-message server-config))
-         doall)))
+(defn employees-with-birthday [today employee-info]
+  (->> employee-info
+       (map (fn [m] (-> m
+                        (update :date-of-birth parse-date)
+                        (assoc :today today))))
+       (filter birthday?)))
+
+(defn prepare-message [from {:keys [name email] :as m}]
+  {:from    "markbastian@gmail.com"                         ;from
+   :to      "markbastian@gmail.com"                         ;email
+   :subject "Happy Birthday"
+   :body    (format "Happy Birthday %s!\nWow, you're %s already!" name (age m))})
+
+(defn password []
+  (let [pwd (JPasswordField.)]
+    (when
+      (= JOptionPane/OK_OPTION
+         (JOptionPane/showConfirmDialog
+           nil
+           pwd
+           "Enter password:"
+           JOptionPane/OK_CANCEL_OPTION
+           JOptionPane/PLAIN_MESSAGE))
+      (.getText pwd))))
+
+(defn send-greetings [server-config {:keys [from today resource]}]
+  (->> resource
+       read-csv-file
+       (employees-with-birthday today)
+       (map (partial prepare-message from))
+       (map (partial postal/send-message server-config))))
+
+(comment
+  (send-greetings
+    {:host "smtp.gmail.com"
+     :user "markbastian@gmail.com"
+     :pass (password)
+     :port 587
+     :tls  true}
+    {:from "markbastian@gmail.com"
+     :today (LocalDate/of 2020 11 28)
+     :resource (io/resource "birthday/employees.csv")})
+
+  (def fake-send-message (constantly {:code 0, :error :SUCCESS, :message "messages sent"}))
+  (def fake-password (constantly "password"))
+
+  (with-redefs [password fake-password
+                postal/send-message fake-send-message]
+    (send-greetings
+      {:host "smtp.gmail.com"
+       :user "markbastian@gmail.com"
+       :pass (password)
+       :port 587
+       :tls  true}
+      {:from     "markbastian@gmail.com"
+       :today    (LocalDate/of 2020 11 28)
+       :resource (io/resource "birthday/employees.csv")})))
+
+
